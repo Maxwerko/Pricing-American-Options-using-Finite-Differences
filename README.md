@@ -1,7 +1,6 @@
 # Finite difference solver to price American options
 
-The script in `Solver.py` Implements both PSOR and the operator splitting method presented in the [1]. Note that in the first line of equation (10) the signs in front of $\lambda$ should be the opposite when implementing the operator splitting method
-(it’s a typo in the article).
+The script in `Solver.py` Implements both PSOR and the operator splitting method presented in the [1]. Note that in the first line of equation (10) the signs in front of $\lambda$ should be the opposite when implementing the operator splitting method (it’s a typo in the article).
 
 
 
