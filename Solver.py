@@ -11,19 +11,10 @@ splitting method (it's a typo in the article).
 
 import numpy as np
 from scipy.sparse import diags
-from scipy.sparse.linalg import spsolve
 import matplotlib.pyplot as plt
-from scipy.linalg import solve_banded
 from scipy.sparse import csc_matrix
 from scipy.sparse.linalg import splu
-from scipy.sparse.linalg import LinearOperator, cg
-from scipy.sparse.linalg import gmres
-from scipy.sparse.linalg import bicgstab
-from scipy.sparse.linalg import lgmres
-from scipy.sparse.linalg import minres
-from scipy.sparse.linalg import qmr
 from tqdm import tqdm
-from scipy.special import erf
 
 
 class AmericanOptionSolver:
@@ -58,7 +49,7 @@ class AmericanOptionSolver:
 
         elif method == 'OperatorSplitting':
             # For operator splitting method, we use a different transformation
-            self.S = np.linspace(0, Smax, M-1)
+            self.S = np.linspace(0, Smax, M)
             self.dt = T / N
             self.v0 = self.payoff(self.S)
         else:
@@ -93,9 +84,9 @@ class AmericanOptionSolver:
             r = self.r
 
             # Coefficients for the tridiagonal matrix A
-            a = 0.5 * (sigma**2 * np.arange(M)**2 - r * np.arange(M))
-            b = - (sigma**2 * np.arange(M)**2 + r)
-            c = 0.5 * (sigma**2 * np.arange(M)**2 + r * np.arange(M))
+            a = 0.5 * (sigma**2 * np.arange(M+1)**2 - r * np.arange(M+1))
+            b = - (sigma**2 * np.arange(M+1)**2 + r)
+            c = 0.5 * (sigma**2 * np.arange(M+1)**2 + r * np.arange(M+1))
 
             # Construct the sparse tridiagonal matrix A
             #print(len(a[2:]), len(b[1:]), len(c[:-2]))
@@ -105,20 +96,18 @@ class AmericanOptionSolver:
             return A
     
     # Efficient version for tridiagonal matrices
-    def psor_tridiagonal(self, A, b_hat, x, g, omega_R=1.5, max_iter=1000, tol=1e-5):
+    def psor_tridiagonal(self, A, b_hat, x, g, omega_R=1.5, max_iter=1000, tol=1e-7):
         """
         Optimized PSOR for tridiagonal A, using x = w - g transformation
         """
         
         # extratract diagonals
-        n = len(b_hat)
-        
         a_diag = A.diagonal(0)  # Main diagonal
         a_lower = A.diagonal(-1)  # Lower diagonal
         a_upper = A.diagonal(1)  # Upper diagonal
 
         x_old = x.copy()
-        
+        n = len(x)
         for k in range(max_iter):
             for i in range(n):
                 # Residual for tridiagonal matrix
@@ -145,7 +134,7 @@ class AmericanOptionSolver:
         return w
         
     
-    def psor_solver(self, A, B, omega=1.2, tol=1e-6, max_iter=1000):
+    def psor_solver(self, A, B, omega=1.3, tol=1e-8, max_iter=10000):
         M, N = self.M, self.N
         # initialize solution vector
         w = self.sol_vec.copy()
@@ -155,8 +144,8 @@ class AmericanOptionSolver:
         for v in tqdm(range(N), desc="PSOR Time Steps", unit="step"):
             tau_v = v * self.dtau
             b = B @ w
-            b[0] += beta * self.g(self.x_min, tau_v) + alpha * self.g(self.x_min, tau_v+1)
-            b[-1] += beta * self.g(self.x_max, tau_v) + alpha * self.g(self.x_max, tau_v+1)
+            b[0] +=  beta * self.g(self.x_min, tau_v) + alpha * self.g(self.x_min, tau_v + self.dtau)
+            b[-1] += beta * self.g(self.x_max, tau_v) + alpha * self.g(self.x_max, tau_v + self.dtau)
 
             # Solve using psor the Aw = b componentwise so that w >= g is obeyed
             g_tauv = self.g(self.x[1:-1], tau_v)
@@ -192,7 +181,7 @@ class AmericanOptionSolver:
         else:
             return np.maximum(self.K - S, 0)
 
-    def operator_splitting_solver(self, A, tol=1e-6, max_iter=1000):
+    def operator_splitting_solver(self, A):
         """
         Operator splitting for Crank-Nicolson scheme for American options
         
@@ -208,9 +197,9 @@ class AmericanOptionSolver:
         """
         M, N = self.M, self.N
         v = self.v0.copy()
-        eta_v = np.zeros(M-1)  # Initialize auxiliary variable
+        eta_v = np.zeros(M)  # Initialize auxiliary variable
         # Create a sparse identity matrix
-        I_sparse = csc_matrix(np.eye(M-1))  # Create a sparse identity matrix
+        I_sparse = csc_matrix(np.eye(M))  # Create a sparse identity matrix
         
         # Backward in time
         for _ in tqdm(range(N), desc="Operator Splitting Time Steps", unit="step"):
@@ -236,6 +225,10 @@ class AmericanOptionSolver:
             
             v_new = np.maximum(v_tilde, payoff) # Enforce constraint: v >= payoff
             eta_new = eta_tilde + (v_tilde - v_new) / self.dt 
+
+            # Ensure eta_new is non-negative
+            if np.any(eta_new < 0):
+                eta_new = np.maximum(eta_new, 0)
             
             # Update for next iteration
             v = v_new
@@ -252,23 +245,23 @@ if __name__ == "__main__":
     T = 1      # Time to maturity
     r = 0.06     # Risk-free interest rate
     sigma = 0.3  # Volatility
-    Smax = S0*5   # Maximum stock price considered
-    M = 250 * 2      # Number of price steps
-    N = 1000 * 2     # Number of time steps
+    Smax = S0*3  # Maximum stock price considered
+    M = 500       # Number of price steps
+    N = 2000     # Number of time steps
     theta = 0.5    # Theta for Implicit-Explicit scheme
-    call = True # Call option
+    call = True   # Call option
+    from time import time
 
     solver = AmericanOptionSolver(S0, K, T, r, sigma, Smax, M, N, theta=theta, call=call, method='PSOR')
     A, B = solver.setup_coefficients()
-
+    start_time = time()
     # PSOR method
     price, stopping_criteria = solver.psor_solver(A, B)
-
+    end_time = time()
+    PSOR_time = end_time - start_time
     # plot the price vector as a function of S
+    plt.figure(figsize=(10,6))
     plt.plot(solver.S, price, label='PSOR')
-    plt.xlabel('Stock Price S')
-    plt.ylabel('Option Price')
-    plt.title('American Option Price using PSOR Method')
 
 
     if stopping_criteria is not None:
@@ -277,14 +270,32 @@ if __name__ == "__main__":
     # Operator Splitting method
     solver_os = AmericanOptionSolver(S0, K, T, r, sigma, Smax, M, N, call=call, method='OperatorSplitting')
     A_os = solver_os.setup_coefficients()   
+    start_time = time()
     price_os = solver_os.operator_splitting_solver(A_os)
+    end_time = time()
+    OS_time = end_time - start_time
 
     # plot the price vector as a function of S
     plt.plot(solver_os.S, price_os, label='Operator Splitting')
     plt.xlabel('Stock Price S')
     plt.ylabel('Option Price')
-    plt.title('American Option Price using Operator Splitting Method')
+    if stopping_criteria is not None:
+       plt.axvline(x=stopping_criteria, color='r', linestyle='--', label='Early Exercise Boundary for PSOR')
+
+    if call:
+        plt.title('American Call Price using OSP and PSOR Methods')
+    else:
+        plt.title('American Put Price using OSP and PSOR Methods')
+
+    plt.axvline(x=K, color='g', linestyle='--', label='Strike Price K')
     plt.legend()
     plt.grid()
+    if call:
+        plt.savefig('American_call.png', dpi=300)
+    else:
+        plt.savefig('American_put.png', dpi=300)
+    print("================= Solver Performance ===================")
+    print(f"PSOR Time taken:               {PSOR_time:.4f} seconds")
+    print(f"Operator Splitting Time taken: {OS_time:.4f} seconds")
+    print("========================================================")
     plt.show()
-    plt.savefig('American_Option_Price_Comparison.png', dpi=300, bbox_inches='tight')
