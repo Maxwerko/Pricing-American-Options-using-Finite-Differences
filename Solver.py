@@ -18,8 +18,7 @@ from tqdm import tqdm
 
 
 class AmericanOptionSolver:
-    def __init__(self, S0, K, T, r, sigma, Smax, M, N, delta=0, theta=0.5, call=True, method='PSOR'):
-        self.S0 = S0       # Initial stock price
+    def __init__(self, K, T, r, sigma, Smax, M, N, delta=0, theta=0.5, call=True, method='PSOR'):
         self.K = K         # Strike price
         self.T = T         # Time to maturity
         self.r = r         # Risk-free interest rate
@@ -35,14 +34,14 @@ class AmericanOptionSolver:
         if method == 'PSOR':
             self.q_delta = 2*(r-delta)/sigma**2
             self.q = 2*r/sigma**2
-            self.dtau = sigma**2 * T/(N)  
+            self.dtau = sigma**2 * T/N  
             self.theta = theta # Theta for Implicit-Explicit scheme
 
             # Initialization
             #self.sol_vec = np.zeros(M+1) # Solution vector
             self.x_max = np.log(Smax/K)
-            self.x_min = -4
-            self.x = np.linspace(self.x_min, self.x_max, M+1)
+            self.x_min = - 4
+            self.x = np.linspace(self.x_min, self.x_max, M+2)
             self.dx = self.x[1] - self.x[0]
             
             self.lambda_ = self.dtau/self.dx**2
@@ -59,9 +58,9 @@ class AmericanOptionSolver:
     
     def g(self, x, tau):
         if self.call:
-            res = np.exp(tau/4 *((self.q_delta -1)**2 + 4*self.q))* np.maximum(np.exp(x/2 *(self.q_delta + 1)) - np.exp(x/2 *(self.q_delta - 1)),0)
+            res = np.exp(tau * 0.25 *((self.q_delta -1)**2 + 4*self.q)) * np.maximum(np.e**(x* 0.5 *(self.q_delta + 1)) - np.e**(x* 0.5 *(self.q_delta - 1)),0)
         else:
-            res = np.exp(tau/4 *((self.q_delta -1)**2 + 4*self.q))* np.maximum(np.exp(x/2 *(self.q_delta - 1)) - np.exp(x/2 *(self.q_delta + 1)),0)
+            res = np.exp(tau * 0.25 *((self.q_delta -1)**2 + 4*self.q)) * np.maximum(np.e**(x* 0.5 *(self.q_delta - 1)) - np.e**(x* 0.5 *(self.q_delta + 1)),0)
         return res
 
     def setup_coefficients(self):
@@ -70,13 +69,14 @@ class AmericanOptionSolver:
             # terminal condition for American put option
             self.sol_vec = self.g(x[1:-1], 0)
             # Construct A and B matrices (B calculates b_i in the report)
-            Middel_diag = np.ones(M-1) * (1+2*self.lambda_ * self.theta)
-            Lower_Higher_diag = np.ones(M-2) * (-self.lambda_ * self.theta)
+            Middel_diag = np.ones(M) * (1+2*self.lambda_ * self.theta)
+            Lower_Higher_diag = np.ones(M-1) * (-self.lambda_ * self.theta)
             A = diags([Lower_Higher_diag, Middel_diag, Lower_Higher_diag], [-1, 0, 1]).tocsc()
-
-            Middel_diag_B = np.ones(M-1) * (1-2*self.lambda_ * (1 - self.theta))
-            Lower_Higher_diag_B = np.ones(M-2) * (self.lambda_ * (1 - self.theta))
+            #print(f"A matrix shape: {A.shape}")
+            Middel_diag_B = np.ones(M) * (1-2*self.lambda_ * (1 - self.theta))
+            Lower_Higher_diag_B = np.ones(M-1) * (self.lambda_ * (1 - self.theta))
             B = diags([Lower_Higher_diag_B, Middel_diag_B, Lower_Higher_diag_B], [-1, 0, 1]).tocsc()
+            #print(f"B matrix shape: {B.shape}")
             return A, B
         else:
             M = self.M
@@ -92,6 +92,7 @@ class AmericanOptionSolver:
             #print(len(a[2:]), len(b[1:]), len(c[:-2]))
             diagonals = [a[2:], b[1:], c[:-2]]
             A = diags(diagonals, [-1, 0, 1]).tocsc()
+            #print(f"A matrix shape: {A.shape}")
 
             return A
     
@@ -134,7 +135,7 @@ class AmericanOptionSolver:
         return w
         
     
-    def psor_solver(self, A, B, omega=1.3, tol=1e-8, max_iter=10000):
+    def psor_solver(self, A, B, omega=1.3, tol=1e-7, max_iter=10000):
         M, N = self.M, self.N
         # initialize solution vector
         w = self.sol_vec.copy()
@@ -144,21 +145,24 @@ class AmericanOptionSolver:
         for v in tqdm(range(N), desc="PSOR Time Steps", unit="step"):
             tau_v = v * self.dtau
             b = B @ w
+            # Incorporate boundary conditions
             b[0] +=  beta * self.g(self.x_min, tau_v) + alpha * self.g(self.x_min, tau_v + self.dtau)
             b[-1] += beta * self.g(self.x_max, tau_v) + alpha * self.g(self.x_max, tau_v + self.dtau)
 
             # Solve using psor the Aw = b componentwise so that w >= g is obeyed
-            g_tauv = self.g(self.x[1:-1], tau_v)
+            g_tauv = self.g(self.x[1:-1], tau_v + self.dtau)
             x = w - g_tauv
             b_hat = b - A @ g_tauv
             w_new = self.psor_tridiagonal(A, b_hat, x, g_tauv, omega_R=omega, max_iter=max_iter, tol=tol)
 
-        self.sol_vec = w_new
+            w = w_new # Update for next time step
+
+        self.sol_vec = w
 
         # Get option price for all S at t=0
         S_vec = self.K * np.exp(self.x[1:-1])
         self.S = S_vec
-        price = self.K * self.sol_vec * np.exp(-self.x[1:-1]/2 *(self.q_delta - 1)) * np.exp(self.N * self.dtau*(0.25*(self.q_delta - 1)**2 + self.q))
+        price = self.K * self.sol_vec * np.exp(-self.x[1:-1]* 0.5 *(self.q_delta - 1)) * np.exp(-self.N * self.dtau * (0.25*(self.q_delta - 1)**2 + self.q))
         
         # Test for early exercise
         eps = self.K * 1e-5
@@ -240,19 +244,22 @@ class AmericanOptionSolver:
 
 # Example usage
 if __name__ == "__main__":
-    S0 = 10      # Initial stock price
     K = 10       # Strike price
     T = 1      # Time to maturity
     r = 0.06     # Risk-free interest rate
     sigma = 0.3  # Volatility
-    Smax = S0*3  # Maximum stock price considered
+    Smax = K*5  # Maximum stock price considered
     M = 500       # Number of price steps
     N = 2000     # Number of time steps
     theta = 0.5    # Theta for Implicit-Explicit scheme
     call = True   # Call option
+    if call:
+        print("Pricing American Call Option")
+    else:        
+        print("Pricing American Put Option")
     from time import time
 
-    solver = AmericanOptionSolver(S0, K, T, r, sigma, Smax, M, N, theta=theta, call=call, method='PSOR')
+    solver = AmericanOptionSolver(K, T, r, sigma, Smax, M, N, theta=theta, call=call, method='PSOR')
     A, B = solver.setup_coefficients()
     start_time = time()
     # PSOR method
@@ -268,7 +275,7 @@ if __name__ == "__main__":
         print(f"Early exercise boundary at S = {stopping_criteria:.4f}")
 
     # Operator Splitting method
-    solver_os = AmericanOptionSolver(S0, K, T, r, sigma, Smax, M, N, call=call, method='OperatorSplitting')
+    solver_os = AmericanOptionSolver(K, T, r, sigma, Smax, M, N, call=call, method='OperatorSplitting')
     A_os = solver_os.setup_coefficients()   
     start_time = time()
     price_os = solver_os.operator_splitting_solver(A_os)
