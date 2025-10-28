@@ -27,7 +27,7 @@ class AmericanOptionSolver:
         self.M = M         # Number of price steps
         self.N = N         # Number of time steps
         self.delta = delta # Dividend yield Only for PSOR method
-
+        self.theta = theta # Theta for Implicit-Explicit scheme
         self.call = call   # Call or put
         self.method = method
 
@@ -35,7 +35,7 @@ class AmericanOptionSolver:
             self.q_delta = 2*(r-delta)/sigma**2
             self.q = 2*r/sigma**2
             self.dtau = sigma**2 * T/N  
-            self.theta = theta # Theta for Implicit-Explicit scheme
+            
 
             # Initialization
             #self.sol_vec = np.zeros(M+1) # Solution vector
@@ -199,44 +199,42 @@ class AmericanOptionSolver:
         v : ndarray, shape (n,)
             Option values at t=0
         """
-        M, N = self.M, self.N
+        M, N, theta = self.M, self.N, self.theta
         v = self.v0.copy()
-        eta_v = np.zeros(M)  # Initialize auxiliary variable
+        eta_vp1 = np.zeros(M)  # Initialize auxiliary variable
         # Create a sparse identity matrix
         I_sparse = csc_matrix(np.eye(M))  # Create a sparse identity matrix
         
         # Backward in time
         for _ in tqdm(range(N), desc="Operator Splitting Time Steps", unit="step"):
             # Solve for intermediate solution
-            # Equation  (A - I/dt) v_tilde = eta - (I/dt + A) v 
+            # Equation (theta * A - I/dt) v_tilde = eta^{k+1} - (I/dt + (1- theta)* A) v 
             
             # Left-hand side matrix: (I/dt - A)
-            LHS = A - I_sparse / self.dt  
+            LHS = theta * A - I_sparse / self.dt  
             
-            # Right-hand side: eta - (I/dt + A) v^k 
+            # Right-hand side: eta^{k+1} - (I/dt + (1-theta)A) v^k 
             # Note: eta^{k+1} = eta^k for the first iteration
-            RHS = (eta_v - (I_sparse / self.dt + 0.5 * A) @ v)
+            RHS = (eta_vp1 - (I_sparse / self.dt + (1-theta) * A) @ v)
 
             LHS_csc = csc_matrix(LHS)
             lu = splu(LHS_csc)
             v_tilde = lu.solve(RHS)
-            eta_tilde = eta_v.copy()
+            eta_tilde = eta_vp1.copy()
             # Compute payoff
             payoff = self.payoff(self.S)
             
             # Projection step (equation 10)
             # This is solved component-wise
-            
             v_new = np.maximum(v_tilde, payoff) # Enforce constraint: v >= payoff
-            eta_new = eta_tilde + (v_tilde - v_new) / self.dt 
+            eta_v = eta_tilde - (v_tilde - v_new) / self.dt 
 
             # Ensure eta_new is non-negative
-            if np.any(eta_new < 0):
-                eta_new = np.maximum(eta_new, 0)
+            eta_v = np.maximum(eta_v, 0)
             
             # Update for next iteration
             v = v_new
-            eta_v = eta_new
+            eta_vp1 = eta_v
         
         return v
     
@@ -289,10 +287,15 @@ if __name__ == "__main__":
     if stopping_criteria is not None:
        plt.axvline(x=stopping_criteria, color='r', linestyle='--', label='Early Exercise Boundary for PSOR')
 
+    S_values = np.linspace(0, Smax, 1000)
     if call:
         plt.title('American Call Price using OSP and PSOR Methods')
+        payoff = np.maximum(S_values - K, 0)
+        plt.plot(S_values, payoff, label='Payoff, $max(0, S - K)$', linestyle=':', color='black')
     else:
         plt.title('American Put Price using OSP and PSOR Methods')
+        payoff = np.maximum(K - S_values, 0)
+        plt.plot(S_values, payoff, label='Payoff, $max(0, K - S)$', linestyle=':', color='black')
 
     plt.axvline(x=K, color='g', linestyle='--', label='Strike Price K')
     plt.legend()
