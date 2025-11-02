@@ -4,7 +4,7 @@ Finite Difference solver to price American options
 =====================================================
 
 This script Implements both PSOR and the operator splitting method presented 
-in the article and compare them. Note that in the first line of equation (10)
+in the article and compares them. Note that in the first line of equation (10)
 the signs in front of λ should be the opposite when implementing the operator 
 splitting method (it's a typo in the article). 
 """
@@ -26,7 +26,7 @@ class AmericanOptionSolver:
         self.Smax = Smax   # Maximum stock price considered
         self.M = M         # Number of price steps
         self.N = N         # Number of time steps
-        self.delta = delta # Dividend yield Only for PSOR method
+        self.delta = delta # Dividend yield 
         self.theta = theta # Theta for Implicit-Explicit scheme
         self.call = call   # Call or put
         self.method = method
@@ -36,9 +36,7 @@ class AmericanOptionSolver:
             self.q = 2*r/sigma**2
             self.dtau = sigma**2 * T/N  
             
-
             # Initialization
-            #self.sol_vec = np.zeros(M+1) # Solution vector
             self.x_max = np.log(Smax/K)
             self.x_min = - 4
             self.x = np.linspace(self.x_min, self.x_max, M+2)
@@ -53,7 +51,6 @@ class AmericanOptionSolver:
             self.v0 = self.payoff(self.S)
         else:
             raise NotImplementedError("Only availabe methods are 'PSOR' or 'OperatorSplitting' as of now.")
-
 
     
     def g(self, x, tau):
@@ -79,21 +76,16 @@ class AmericanOptionSolver:
             #print(f"B matrix shape: {B.shape}")
             return A, B
         else:
-            M = self.M
-            sigma = self.sigma
-            r = self.r
+            M, sigma, r, delta = self.M, self.sigma, self.r, self.delta
 
             # Coefficients for the tridiagonal matrix A
             a = 0.5 * (sigma**2 * np.arange(M+1)**2 - r * np.arange(M+1))
-            b = - (sigma**2 * np.arange(M+1)**2 + r)
+            b = - (sigma**2 * np.arange(M+1)**2 + (r-delta))
             c = 0.5 * (sigma**2 * np.arange(M+1)**2 + r * np.arange(M+1))
 
             # Construct the sparse tridiagonal matrix A
-            #print(len(a[2:]), len(b[1:]), len(c[:-2]))
             diagonals = [a[2:], b[1:], c[:-2]]
             A = diags(diagonals, [-1, 0, 1]).tocsc()
-            #print(f"A matrix shape: {A.shape}")
-
             return A
     
     # Efficient version for tridiagonal matrices
@@ -136,7 +128,7 @@ class AmericanOptionSolver:
         
     
     def psor_solver(self, A, B, omega=1.3, tol=1e-7, max_iter=10000):
-        M, N = self.M, self.N
+        N = self.N
         # initialize solution vector
         w = self.sol_vec.copy()
         alpha = self.lambda_ * self.theta
@@ -166,6 +158,7 @@ class AmericanOptionSolver:
         
         # Test for early exercise
         eps = self.K * 1e-5
+
         if self.call:
             early_ex = np.abs(self.K-S_vec + price)
             i_f = np.argmin(early_ex)
@@ -187,7 +180,7 @@ class AmericanOptionSolver:
 
     def operator_splitting_solver(self, A):
         """
-        Operator splitting for Crank-Nicolson scheme for American options
+        Operator splitting for American options.
         
         Parameters:
         -----------
@@ -198,6 +191,7 @@ class AmericanOptionSolver:
         --------
         v : ndarray, shape (n,)
             Option values at t=0
+
         """
         M, N, theta = self.M, self.N, self.theta
         v = self.v0.copy()
@@ -244,20 +238,22 @@ class AmericanOptionSolver:
 if __name__ == "__main__":
     K = 10       # Strike price
     T = 1      # Time to maturity
-    r = 0.06     # Risk-free interest rate
-    sigma = 0.3  # Volatility
+    r = 0.1     # Risk-free interest rate
+    sigma = 0.8  # Volatility
     Smax = K*5  # Maximum stock price considered
     M = 500       # Number of price steps
     N = 2000     # Number of time steps
     theta = 0.5    # Theta for Implicit-Explicit scheme
+    delta = 0.01  # Dividend yield 
     call = True   # Call option
+
     if call:
         print("Pricing American Call Option")
     else:        
         print("Pricing American Put Option")
     from time import time
 
-    solver = AmericanOptionSolver(K, T, r, sigma, Smax, M, N, theta=theta, call=call, method='PSOR')
+    solver = AmericanOptionSolver(K, T, r, sigma, Smax, M, N, theta=theta, call=call, method='PSOR', delta=delta)
     A, B = solver.setup_coefficients()
     start_time = time()
     # PSOR method
@@ -273,7 +269,7 @@ if __name__ == "__main__":
         print(f"Early exercise boundary at S = {stopping_criteria:.4f}")
 
     # Operator Splitting method
-    solver_os = AmericanOptionSolver(K, T, r, sigma, Smax, M, N, call=call, method='OperatorSplitting')
+    solver_os = AmericanOptionSolver(K, T, r, sigma, Smax, M, N, theta=theta, call=call, method='OperatorSplitting', delta=delta)
     A_os = solver_os.setup_coefficients()   
     start_time = time()
     price_os = solver_os.operator_splitting_solver(A_os)
