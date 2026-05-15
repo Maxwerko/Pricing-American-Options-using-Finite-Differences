@@ -6,6 +6,22 @@ The [Convergence_test.py](Convergence_test.py) script runs convergence tests for
 
 Expected plots: In [Convergence_M.png](Convergence_M.png), for a smooth solution you expect $\|e\| \sim C M^{-2}$ (slope about $-2$ in log-log) from the second-order spatial stencil, although the free boundary can reduce this toward $M^{-1}$. In [Convergence_N.png](Convergence_N.png), with $\theta=1/2$ (Crank-Nicolson) you expect $\|e\| \sim C N^{-2}$ (slope about $-2$), while $\theta=1$ would give $N^{-1}$; the obstacle can again reduce the observed slope and PSOR can hit a tolerance floor.
 
+## Setup
+
+Using uv:
+
+```powershell
+uv sync
+uv run python Solver.py
+```
+
+Using pip:
+
+```powershell
+python -m pip install .
+python Solver.py
+```
+
 ## Summary
 The finite difference approach reformulates the American option pricing as a Linear Complementarity Problem (LCP), avoiding explicit tracking of the early-exercise boundary $S_f(t)$ [[2]](#Tools). Using the transformations $S = Ke^x$ and $\tau$-time ($t = T - 2\tau/\sigma^2$), the value function becomes $V(S,t) = K \exp\{-\frac{1}{2}(q_\delta -1)x -(\frac{1}{4}(q_\delta -1)^2 + q)\tau\} y(x,\tau)$, where $q = \frac{2r}{\sigma^2}$ and $q_\delta= \frac{2(r-\delta)}{\sigma^2}$. The problem requires finding $y$ such that:
 

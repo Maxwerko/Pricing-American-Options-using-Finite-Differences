@@ -331,7 +331,7 @@ def plot_convergence(errors_M, errors_N, M_values, N_values):
     ]
     norm_handles = [
         Line2D([0], [0], color='black', linestyle=norm_styles['L2'], marker=norm_markers['L2'], label='L2'),
-        Line2D([0], [0], color='black', linestyle=norm_styles['L_inf'], marker=norm_markers['L_inf'], label='$L_{\infty}$'),
+        Line2D([0], [0], color='black', linestyle=norm_styles['L_inf'], marker=norm_markers['L_inf'], label='$L_{\\infty}$'),
     ]
 
     fig.legend(handles=method_handles, loc='upper center', bbox_to_anchor=(0.29, 0.92), ncol=3, frameon=True)

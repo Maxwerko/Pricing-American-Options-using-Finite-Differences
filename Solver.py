@@ -13,7 +13,7 @@ import numpy as np
 from scipy.sparse import diags
 import matplotlib.pyplot as plt
 from scipy.sparse import csc_matrix
-from scipy.sparse.linalg import splu, spilu, inv
+from scipy.sparse.linalg import splu
 from tqdm import tqdm
 
 
