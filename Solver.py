@@ -13,7 +13,7 @@ import numpy as np
 from scipy.sparse import diags
 import matplotlib.pyplot as plt
 from scipy.sparse import csc_matrix
-from scipy.sparse.linalg import splu
+from scipy.sparse.linalg import splu, spilu, inv
 from tqdm import tqdm
 
 
@@ -34,11 +34,11 @@ class AmericanOptionSolver:
         if method == 'PSOR':
             self.q_delta = 2*(r-delta)/sigma**2
             self.q = 2*r/sigma**2
-            self.dtau = sigma**2 * T/N  
+            self.dtau = sigma**2 * T/(2*N)  
             
             # Initialization
             self.x_max = np.log(Smax/K)
-            self.x_min = - 4
+            self.x_min = - 5
             self.x = np.linspace(self.x_min, self.x_max, M+2)
             self.dx = self.x[1] - self.x[0]
             
@@ -47,7 +47,8 @@ class AmericanOptionSolver:
         elif method == 'OperatorSplitting':
             # For operator splitting method, we use a different transformation
             self.S = np.linspace(0, Smax, M)
-            self.dt = T / N
+            self.dS = self.S[1] - self.S[0]
+            self.dt = T/N
             self.v0 = self.payoff(self.S)
         else:
             raise NotImplementedError("Only availabe methods are 'PSOR' or 'OperatorSplitting' as of now.")
@@ -77,15 +78,23 @@ class AmericanOptionSolver:
             return A, B
         else:
             M, sigma, r, delta = self.M, self.sigma, self.r, self.delta
+            S = self.S
+            dS = self.dS
 
-            # Coefficients for the tridiagonal matrix A
-            a = 0.5 * (sigma**2 * np.arange(M+1)**2 - r * np.arange(M+1))
-            b = - (sigma**2 * np.arange(M+1)**2 + (r-delta))
-            c = 0.5 * (sigma**2 * np.arange(M+1)**2 + r * np.arange(M+1))
+            # Coefficients for the tridiagonal matrix A on interior nodes
+            S_i = S[1:-1]
+            sigma2 = sigma * sigma
+            a = 0.5 * (sigma2 * S_i**2 / dS**2 - (r - delta) * S_i / dS)
+            b = - (sigma2 * S_i**2 / dS**2 + r)
+            c = 0.5 * (sigma2 * S_i**2 / dS**2 + (r - delta) * S_i / dS)
 
-            # Construct the sparse tridiagonal matrix A
-            diagonals = [a[2:], b[1:], c[:-2]]
-            A = diags(diagonals, [-1, 0, 1]).tocsc()
+            self.os_a = a
+            self.os_b = b
+            self.os_c = c
+
+            # Construct the sparse tridiagonal matrix A for interior points
+            diagonals = [a[1:], b, c[:-1]]
+            A = diags(diagonals, [-1, 0, 1]).tocsc() 
             return A
     
     # Efficient version for tridiagonal matrices
@@ -158,14 +167,10 @@ class AmericanOptionSolver:
         
         # Test for early exercise
         eps = self.K * 1e-5
+        payoff = self.payoff(S_vec)
+        early_ex = np.abs(price - payoff)
+        i_f = np.argmin(early_ex)
 
-        if self.call:
-            early_ex = np.abs(self.K-S_vec + price)
-            i_f = np.argmin(early_ex)
-        else:
-            early_ex = np.abs(price + S_vec - self.K)
-            i_f = np.argmax(early_ex)
-        
         if early_ex[i_f] < eps:
             return price, S_vec[i_f]
         else:
@@ -189,45 +194,64 @@ class AmericanOptionSolver:
             
         Returns:
         --------
-        v : ndarray, shape (n,)
+        v : ndarray, shape (M,)
             Option values at t=0
 
         """
         M, N, theta = self.M, self.N, self.theta
         v = self.v0.copy()
+        v_new = self.v0.copy()
         eta_vp1 = np.zeros(M)  # Initialize auxiliary variable
-        # Create a sparse identity matrix
-        I_sparse = csc_matrix(np.eye(M))  # Create a sparse identity matrix
-        
+
+        m_int = M - 2
+        # Create a sparse identity matrix for interior nodes
+        I_sparse = csc_matrix(np.eye(m_int))
+
+        # Solve for intermediate solution on interior nodes
+        # (I/dt - theta * A) v_tilde = (I/dt + (1- theta) * A) v + eta
+        LHS = I_sparse / self.dt - theta * A
+        LHS_csc = csc_matrix(LHS)
+        LU = splu(LHS_csc)
+
+        VBC = self.payoff(self.S)
+
+        # Fixed boundary contribution from A_full * v
+        bc = np.zeros(m_int)
+        if m_int > 0:
+            bc[0] = self.os_a[0] * VBC[0]
+            bc[-1] = self.os_c[-1] * VBC[-1]
+
         # Backward in time
         for _ in tqdm(range(N), desc="Operator Splitting Time Steps", unit="step"):
-            # Solve for intermediate solution
-            # Equation (theta * A - I/dt) v_tilde = eta^{k+1} - (I/dt + (1- theta)* A) v 
-            
-            # Left-hand side matrix: (I/dt - A)
-            LHS = theta * A - I_sparse / self.dt  
-            
-            # Right-hand side: eta^{k+1} - (I/dt + (1-theta)A) v^k 
-            # Note: eta^{k+1} = eta^k for the first iteration
-            RHS = (eta_vp1 - (I_sparse / self.dt + (1-theta) * A) @ v)
+            v[0] = VBC[0]
+            v[-1] = VBC[-1]
+            v_new[0] = VBC[0]
+            v_new[-1] = VBC[-1]
 
-            LHS_csc = csc_matrix(LHS)
-            lu = splu(LHS_csc)
-            v_tilde = lu.solve(RHS)
-            eta_tilde = eta_vp1.copy()
-            # Compute payoff
-            payoff = self.payoff(self.S)
+            v_int = v[1:-1]
+            eta_int = eta_vp1[1:-1]
+
+            # Right-hand side: (I/dt + (1-theta)A) v + eta, with boundary terms
+            RHS = (I_sparse / self.dt + (1 - theta) * A) @ v_int + eta_int + bc
+
+            # Solve for intermediate v_tilde on interior nodes
+            v_tilde_int = LU.solve(RHS)
+
+            if (nan := np.any(np.isnan(v_tilde_int))) or np.any(np.isinf(v_tilde_int)):
+                error_str = "NaN" if nan else "Inf" 
+                raise ValueError("Numerical instability detected: v_tilde contains " + error_str + " values.")
             
             # Projection step (equation 10)
-            # This is solved component-wise
-            v_new = np.maximum(v_tilde, payoff) # Enforce constraint: v >= payoff
-            eta_v = eta_tilde - (v_tilde - v_new) / self.dt 
+            # This is solved component-wise on interior nodes
+            v_new[1:-1] = np.maximum(v_tilde_int, VBC[1:-1])
+            eta_v = eta_vp1.copy()
+            eta_v[1:-1] = eta_int + (v_new[1:-1] - v_tilde_int) / self.dt
 
             # Ensure eta_new is non-negative
-            eta_v = np.maximum(eta_v, 0)
-            
+            eta_v[1:-1] = np.maximum(eta_v[1:-1], 0)
+
             # Update for next iteration
-            v = v_new
+            v[:] = v_new
             eta_vp1 = eta_v
         
         return v
@@ -236,37 +260,22 @@ class AmericanOptionSolver:
 
 # Example usage
 if __name__ == "__main__":
-    K = 10       # Strike price
-    T = 1      # Time to maturity
-    r = 0.1     # Risk-free interest rate
-    sigma = 0.8  # Volatility
-    Smax = K*5  # Maximum stock price considered
-    M = 500       # Number of price steps
-    N = 2000     # Number of time steps
-    theta = 0.5    # Theta for Implicit-Explicit scheme
-    delta = 0.01  # Dividend yield 
-    call = True   # Call option
+    K = 10          # Strike price
+    T = 1           # Time to maturity
+    r = 0.06        # Risk-free interest rate
+    sigma = 0.3     # Volatility
+    Smax = K*4      # Maximum stock price considered
+    M = 500         # Number of price steps
+    N = 2000        # Number of time steps
+    theta = 0.5     # Theta for Implicit-Explicit scheme
+    delta = 0.0     # Dividend yield 
+    call = False    # Call option
 
     if call:
         print("Pricing American Call Option")
     else:        
         print("Pricing American Put Option")
     from time import time
-
-    solver = AmericanOptionSolver(K, T, r, sigma, Smax, M, N, theta=theta, call=call, method='PSOR', delta=delta)
-    A, B = solver.setup_coefficients()
-    start_time = time()
-    # PSOR method
-    price, stopping_criteria = solver.psor_solver(A, B)
-    end_time = time()
-    PSOR_time = end_time - start_time
-    # plot the price vector as a function of S
-    plt.figure(figsize=(10,6))
-    plt.plot(solver.S, price, label='PSOR')
-
-
-    if stopping_criteria is not None:
-        print(f"Early exercise boundary at S = {stopping_criteria:.4f}")
 
     # Operator Splitting method
     solver_os = AmericanOptionSolver(K, T, r, sigma, Smax, M, N, theta=theta, call=call, method='OperatorSplitting', delta=delta)
@@ -275,13 +284,29 @@ if __name__ == "__main__":
     price_os = solver_os.operator_splitting_solver(A_os)
     end_time = time()
     OS_time = end_time - start_time
+    #print(price_os)
+
+    solver = AmericanOptionSolver(K, T, r, sigma, Smax, M, N, theta=theta, call=call, method='PSOR', delta=delta)
+    A, B = solver.setup_coefficients()
+    # PSOR method
+
+    start_time = time()
+    price, stopping_criteria = solver.psor_solver(A, B)
+    end_time = time()
+    PSOR_time = end_time - start_time
+   
+    
+    # plot the price vector as a function of S
+    plt.figure(figsize=(10,6))
+    plt.plot(solver.S, price, label='PSOR')    
+
+    # Interpolate OSP prices onto the PSOR grid for a like-for-like comparison
+    price_os_on_psor = np.interp(solver.S, solver_os.S, price_os)
 
     # plot the price vector as a function of S
-    plt.plot(solver_os.S, price_os, label='Operator Splitting')
+    plt.plot(solver.S, price_os_on_psor, label='Operator Splitting (interp)')
     plt.xlabel('Stock Price S')
     plt.ylabel('Option Price')
-    if stopping_criteria is not None:
-       plt.axvline(x=stopping_criteria, color='r', linestyle='--', label='Early Exercise Boundary for PSOR')
 
     S_values = np.linspace(0, Smax, 1000)
     if call:
@@ -296,10 +321,12 @@ if __name__ == "__main__":
     plt.axvline(x=K, color='g', linestyle='--', label='Strike Price K')
     plt.legend()
     plt.grid()
+    
     if call:
         plt.savefig('American_call.png', dpi=300)
     else:
         plt.savefig('American_put.png', dpi=300)
+
     print("================= Solver Performance ===================")
     print(f"PSOR Time taken:               {PSOR_time:.4f} seconds")
     print(f"Operator Splitting Time taken: {OS_time:.4f} seconds")

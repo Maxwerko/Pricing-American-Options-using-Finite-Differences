@@ -219,3 +219,6 @@ Operator_Splitting_Methods_for_American_Option_Pricing.pdf
 # Streamlit
 .streamlit/secrets.toml
 
+cache/
+.github
+.vscode

@@ -1,6 +1,10 @@
 # Finite difference solver to price American options
 
-The script in `Solver.py` Implements both PSOR (from [[2]](#Tools)) and the operator splitting method presented in [[1]](#Ikonen). Note that in the first line of equation (10) the signs in front of $\lambda$ should be the opposite when implementing the operator splitting method (it’s a typo in the article [[1]](#Ikonen)).
+The script in [Solver.py](Solver.py) Implements both PSOR (from [[2]](#Tools)) and the operator splitting method presented in [[1]](#Ikonen). Note that in the first line of equation (10) the signs in front of $\lambda$ should be the opposite when implementing the operator splitting method (it’s a typo in [[1]](#Ikonen)).
+
+The [Convergence_test.py](Convergence_test.py) script runs convergence tests for both methods by comparing coarse-grid solutions against a fine-grid reference.
+
+Expected plots: In [Convergence_M.png](Convergence_M.png), for a smooth solution you expect $\|e\| \sim C M^{-2}$ (slope about $-2$ in log-log) from the second-order spatial stencil, although the free boundary can reduce this toward $M^{-1}$. In [Convergence_N.png](Convergence_N.png), with $\theta=1/2$ (Crank-Nicolson) you expect $\|e\| \sim C N^{-2}$ (slope about $-2$), while $\theta=1$ would give $N^{-1}$; the obstacle can again reduce the observed slope and PSOR can hit a tolerance floor.
 
 ## Summary
 The finite difference approach reformulates the American option pricing as a Linear Complementarity Problem (LCP), avoiding explicit tracking of the early-exercise boundary $S_f(t)$ [[2]](#Tools). Using the transformations $S = Ke^x$ and $\tau$-time ($t = T - 2\tau/\sigma^2$), the value function becomes $V(S,t) = K \exp\{-\frac{1}{2}(q_\delta -1)x -(\frac{1}{4}(q_\delta -1)^2 + q)\tau\} y(x,\tau)$, where $q = \frac{2r}{\sigma^2}$ and $q_\delta= \frac{2(r-\delta)}{\sigma^2}$. The problem requires finding $y$ such that:
@@ -52,6 +56,9 @@ $$
 $$
 
 solving for the component pairs $V_i^{(v)}$ and $\eta_i^{(v)}$. This method is significantly more efficient than PSOR while it maintains comparable accuracy [[1]](#Ikonen).
+
+
+**Note:** The call option appears to behave correctly, but the put option does not. In [American_put.png](American_put.png), the PSOR and operator splitting curves diverge near the strike price K. The cause is unclear. It could be an implementation issue or a mismatch related to the PSOR log-price transformation, although the call case aligns well in [American_call.png](American_call.png).
 
 ## Sources
 
